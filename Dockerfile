@@ -16,7 +16,6 @@ USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
         # SSH / deploy
         openssh-client \
-        scp \
         # General build deps listed in the repo's README
         gawk \
         wget \
