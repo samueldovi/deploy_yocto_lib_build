@@ -1,22 +1,32 @@
 # =============================================================================
 # Yocto + Debix build environment
-# Builds the install.sh setup from samueldovi/build_dts_libs_debix inside a
-# crops/poky container.  The deploy scripts (deploy_libs.sh / deploy_dts.sh)
-# SSH/SCP to the target EVK, so the container MUST be started with
-# --network=host (see docker-compose.yml or run.sh).
+#
+# Why ubuntu:22.04 and not crops/poky?
+#   crops/poky does NOT have a static "pokyuser".  That user is created
+#   dynamically at runtime by poky-entry.py based on the --workdir argument.
+#   Using it as a plain FROM base and referencing pokyuser during build will
+#   always fail with "invalid user".  ubuntu:22.04 + a manually created user
+#   is the straightforward fix and is exactly what crops/poky does under the
+#   hood anyway.
 # =============================================================================
 
-FROM crops/poky:ubuntu-22.04
+FROM ubuntu:22.04
+
+# Avoid interactive prompts during package install
+ARG DEBIAN_FRONTEND=noninteractive
 
 # ---------------------------------------------------------------------------
-# 1. Root: install extra system packages that crops/poky doesn't include
+# 1. Create the build user (uid 1000, same as crops/poky convention)
 # ---------------------------------------------------------------------------
-USER root
+RUN useradd -m -s /bin/bash -u 1000 pokyuser
 
+# ---------------------------------------------------------------------------
+# 2. Install everything: build tools + SSH/SCP for deploy
+# ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         # SSH / deploy
         openssh-client \
-        # General build deps listed in the repo's README
+        # Yocto / OE build deps (from the repo README)
         gawk \
         wget \
         git \
@@ -44,11 +54,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zstd \
         liblz4-tool \
         libssl-dev \
+        sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# 2. Root: clone the repo into pokyuser's home while still root so we can
-#    set ownership atomically.  Avoids a chown on a second layer.
+# 3. Clone the repo, set ownership, mark script executable — all in one layer
 # ---------------------------------------------------------------------------
 RUN git clone --depth=1 \
         https://github.com/samueldovi/build_dts_libs_debix.git \
@@ -57,33 +67,27 @@ RUN git clone --depth=1 \
     && chmod +x /home/pokyuser/build_dts_libs_debix/install.sh
 
 # ---------------------------------------------------------------------------
-# 3. Root: create the .ssh directory for the pokyuser so SSH keys can be
-#    bind-mounted at runtime without permission errors.
+# 4. Prepare .ssh directory for the bind-mounted deploy key
 # ---------------------------------------------------------------------------
 RUN mkdir -p /home/pokyuser/.ssh \
     && chown pokyuser:pokyuser /home/pokyuser/.ssh \
-    && chmod 700                /home/pokyuser/.ssh
+    && chmod 700               /home/pokyuser/.ssh
 
 # ---------------------------------------------------------------------------
-# 4. Switch to pokyuser — everything below and at runtime runs as this user.
-#    Yocto / BitBake will refuse to run as root.
+# 5. Drop to non-root for everything from here on (BitBake refuses root)
 # ---------------------------------------------------------------------------
 USER pokyuser
 WORKDIR /home/pokyuser/build_dts_libs_debix
 
 # ---------------------------------------------------------------------------
-# 5. ENTRYPOINT — sources install.sh (important: it sets env vars that the
-#    deploy scripts depend on, so it MUST be sourced, not executed).
-#    After sourcing, drop into an interactive shell so the user can run
-#    deploy_libs.sh / deploy_dts.sh manually, OR pass a command as CMD.
+# 6. Entrypoint: source install.sh (sets env vars needed by deploy scripts),
+#    then hand off to whatever CMD is passed.
 #
-#    Usage examples:
-#      docker run ... <image>                          → interactive shell
-#      docker run ... <image> ./deploy_libs.sh opencv  → run one deploy directly
+#    Interactive:  docker compose run -it debix          -> bash shell
+#    One-shot:     docker compose run debix ./deploy_libs.sh opencv
 # ---------------------------------------------------------------------------
 ENTRYPOINT ["/bin/bash", "-c", \
     "source ./install.sh && exec \"$@\"", \
     "--"]
 
-# Default CMD: drop into bash so the user can work interactively
 CMD ["bash"]
