@@ -1,35 +1,90 @@
-# Use a vetted Yocto-compatible base image
-# crops/poky is the standard for running Yocto in Docker
+# =============================================================================
+# Yocto + Debix build environment
+# Builds the install.sh setup from samueldovi/build_dts_libs_debix inside a
+# crops/poky container.  The deploy scripts (deploy_libs.sh / deploy_dts.sh)
+# SSH/SCP to the target EVK, so the container MUST be started with
+# --network=host (see docker-compose.yml or run.sh).
+# =============================================================================
+
 FROM crops/poky:ubuntu-22.04
 
+# ---------------------------------------------------------------------------
+# 1. Root: install extra system packages that crops/poky doesn't include
+# ---------------------------------------------------------------------------
 USER root
 
-# Install additional dependencies required for SSH and general build tools
-RUN apt-get update && apt-get install -y \
-    git \
-    ssh \
-    scp \
-    openssh-client \
-    sudo \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        # SSH / deploy
+        openssh-client \
+        scp \
+        # General build deps listed in the repo's README
+        gawk \
+        wget \
+        git \
+        diffstat \
+        unzip \
+        texinfo \
+        gcc \
+        build-essential \
+        chrpath \
+        socat \
+        cpio \
+        python3 \
+        python3-pip \
+        python3-pexpect \
+        xz-utils \
+        debianutils \
+        iputils-ping \
+        python3-git \
+        python3-jinja2 \
+        libegl1-mesa \
+        libsdl1.2-dev \
+        xterm \
+        python3-subunit \
+        mesa-common-dev \
+        zstd \
+        liblz4-tool \
+        libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
-WORKDIR /home/pokyuser
+# ---------------------------------------------------------------------------
+# 2. Root: clone the repo into pokyuser's home while still root so we can
+#    set ownership atomically.  Avoids a chown on a second layer.
+# ---------------------------------------------------------------------------
+RUN git clone --depth=1 \
+        https://github.com/samueldovi/build_dts_libs_debix.git \
+        /home/pokyuser/build_dts_libs_debix \
+    && chown -R pokyuser:pokyuser /home/pokyuser/build_dts_libs_debix \
+    && chmod +x /home/pokyuser/build_dts_libs_debix/install.sh
 
-# Clone the repository
-RUN git clone https://github.com/samueldovi/build_dts_libs_debix.git
+# ---------------------------------------------------------------------------
+# 3. Root: create the .ssh directory for the pokyuser so SSH keys can be
+#    bind-mounted at runtime without permission errors.
+# ---------------------------------------------------------------------------
+RUN mkdir -p /home/pokyuser/.ssh \
+    && chown pokyuser:pokyuser /home/pokyuser/.ssh \
+    && chmod 700                /home/pokyuser/.ssh
 
-# Fix permissions to ensure the pokyuser can execute scripts
-RUN chown -R pokyuser:pokyuser /home/pokyuser/build_dts_libs_debix
-
-# Switch back to the non-root user (Yocto/BitBake should not run as root)
+# ---------------------------------------------------------------------------
+# 4. Switch to pokyuser — everything below and at runtime runs as this user.
+#    Yocto / BitBake will refuse to run as root.
+# ---------------------------------------------------------------------------
 USER pokyuser
-
-# Set the working directory to the repo
 WORKDIR /home/pokyuser/build_dts_libs_debix
 
-# Ensure the install script is executable
-RUN chmod +x install.sh
+# ---------------------------------------------------------------------------
+# 5. ENTRYPOINT — sources install.sh (important: it sets env vars that the
+#    deploy scripts depend on, so it MUST be sourced, not executed).
+#    After sourcing, drop into an interactive shell so the user can run
+#    deploy_libs.sh / deploy_dts.sh manually, OR pass a command as CMD.
+#
+#    Usage examples:
+#      docker run ... <image>                          → interactive shell
+#      docker run ... <image> ./deploy_libs.sh opencv  → run one deploy directly
+# ---------------------------------------------------------------------------
+ENTRYPOINT ["/bin/bash", "-c", \
+    "source ./install.sh && exec \"$@\"", \
+    "--"]
 
-# Automatically run the install script when the container starts
-ENTRYPOINT ["/bin/bash", "./install.sh"]
+# Default CMD: drop into bash so the user can work interactively
+CMD ["bash"]

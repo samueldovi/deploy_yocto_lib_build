@@ -1,0 +1,53 @@
+# =============================================================================
+# docker-compose.yml  —  Yocto / Debix build environment
+#
+# Prerequisites:
+#   1. Generate (or locate) an SSH key-pair that is already authorized on
+#      your Debix EVK board:
+#          ssh-keygen -t ed25519 -f ~/.ssh/debix_deploy
+#          ssh-copy-id -i ~/.ssh/debix_deploy root@<EVK_IP>
+#
+#   2. Copy the PRIVATE key path into the SSHKEY variable below (or keep the
+#      default ~/.ssh/debix_deploy).
+#
+#   3. Edit debix.conf (ship it alongside this file) with your EVK IP.
+#
+# Run:
+#   docker compose up -it        # interactive shell after install.sh
+#   docker compose run --rm debix ./deploy_libs.sh opencv
+# =============================================================================
+
+version: "3.8"
+
+services:
+  debix:
+    build: .
+    # ------------------------------------------------------------------
+    # network_mode: host  →  container shares the host's network stack.
+    # This is the ONLY reliable way to SSH/SCP to a board on the local LAN
+    # from inside a container, especially on WSL2 where NAT can interfere.
+    # ------------------------------------------------------------------
+    network_mode: host
+
+    # ------------------------------------------------------------------
+    # Volumes
+    # ------------------------------------------------------------------
+    volumes:
+      # SSH private key (read-only) — adjust the host path if your key
+      # lives somewhere else.  The container expects it at a fixed path;
+      # see debix.conf / deploy scripts.
+      - "${HOME}/.ssh/debix_deploy:/home/pokyuser/.ssh/id_ed25519:ro"
+
+      # Yocto build cache — this directory can easily be 20-50 GB.
+      # Persisting it on the host between runs saves HOURS of rebuild time.
+      - "./yocto_build_cache:/home/pokyuser/build_dts_libs_debix/build"
+
+      # debix.conf — your target IP / user config, mounted over the repo's
+      # copy so you never have to rebuild the image to change it.
+      - "./debix.conf:/home/pokyuser/build_dts_libs_debix/debix.conf:ro"
+
+    # ------------------------------------------------------------------
+    # Keep STDIN open so `docker compose up -it` gives you a shell
+    # ------------------------------------------------------------------
+    stdin_open: true
+    tty: true
